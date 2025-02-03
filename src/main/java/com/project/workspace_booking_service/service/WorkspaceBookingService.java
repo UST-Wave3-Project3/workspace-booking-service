@@ -1,10 +1,12 @@
 package com.project.workspace_booking_service.service;
 
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.List;
 import java.util.Optional;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import com.project.workspace_booking_service.client.UserClient;
@@ -28,15 +30,62 @@ public class WorkspaceBookingService {
     private WorkspaceClient workspaceClient;
     
     public WorkspaceBooking createWorkspaceBooking(WorkspaceBooking workspaceBooking) {
-        UserDto user = userClient.getUserById(workspaceBooking.getUserId());
-        if (user == null) {
-            throw new RuntimeException("User not found with ID: " + workspaceBooking.getUserId());
-        }
+    	WorkspaceBooking createdBooking = workspaceBookingRepository.save(workspaceBooking);
+
         WorkspaceDto workspace = workspaceClient.getWorkspaceById(workspaceBooking.getWorkspaceId());
-        if (workspace == null || !workspace.isWorkspaceAvailable()) {
-            throw new RuntimeException("Workspace not available with ID: " + workspaceBooking.getWorkspaceId());
+
+        if (LocalTime.now().isBefore(workspaceBooking.getWstartTime())) {
+            System.out.println("Workspace seat " + workspace.getWorkspaceId() + " is available until " + workspaceBooking.getWstartTime());
+        } else {
+           if (workspace.isWorkspaceAvailable()) {
+                workspace.setWorkspaceAvailable(false);
+                workspaceClient.updateWorkspace(workspace);
+                System.out.println("Workspace seat " + workspace.getWorkspaceId() + " is now booked (false).");
+            }
         }
-        return workspaceBookingRepository.save(workspaceBooking);
+        return createdBooking;
+    }
+    
+    @Scheduled(fixedRate = 10000) // Runs every 1 minute
+    public void checkAndToggleParkingAvailability() {
+        System.out.println("Checking expired bookings at: " + LocalTime.now());
+
+        List<WorkspaceBooking> bookings = workspaceBookingRepository.findAll();
+
+        // Iterate through all bookings
+        for (WorkspaceBooking booking : bookings) {
+            LocalDate bookingDate = booking.getWorkspaceBookingDate();
+            LocalTime startTime = booking.getWstartTime();
+            LocalTime endTime = booking.getWendTime();
+            WorkspaceDto workspace = workspaceClient.getWorkspaceById(booking.getWorkspaceId());
+
+            System.out.println("Checking Booking ID: " + booking.getWbookingId() + 
+                               " | Date: " + bookingDate + 
+                               " | Start Time: " + startTime + 
+                               " | End Time: " + endTime);
+
+            boolean isSlotBooked = false;
+            for (WorkspaceBooking activeBooking : bookings) {
+                if (activeBooking.getWorkspaceId() == booking.getWorkspaceId() &&
+                    LocalDate.now().isEqual(activeBooking.getWorkspaceBookingDate()) &&
+                    (LocalTime.now().isAfter(activeBooking.getWstartTime()) && LocalTime.now().isBefore(activeBooking.getWendTime()))) {
+                    isSlotBooked = true;
+                    break;
+                }
+            }
+
+            if (isSlotBooked && workspace.isWorkspaceAvailable()) {
+                workspace.setWorkspaceAvailable(false);
+                workspaceClient.updateWorkspace(workspace);
+                System.out.println("Workspace Seat  " + workspace.getWorkspaceId() + " is now booked (false).");
+            }
+
+            if (!isSlotBooked && !workspace.isWorkspaceAvailable()) {
+                workspace.setWorkspaceAvailable(true);
+                workspaceClient.updateWorkspace(workspace);
+                System.out.println("Workspace seat " + workspace.getWorkspaceId() + " is now available (true).");
+            }
+        }
     }
         
     public void deleteWorkspaceBooking(int workspaceBookingId) {
